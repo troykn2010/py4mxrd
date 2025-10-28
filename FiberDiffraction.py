@@ -5,13 +5,12 @@ from copy import deepcopy
 import matplotlib.pyplot as plt
 
 class fiber_image():
-    
-    def __init__(self,image,mask,centeri=0,centerj=0,align_threshold=15,AutoCentering=False,quiet=True,dq = None):
+    def __init__(self,image,mask,centeri=0,centerj=0,align_threshold=15,AutoCentering=False,quiet=True,dq = None,phi = 0):
         #image is a 2d nd.array       
         self.image = image
         self.mask = mask
         self.align_threshold = align_threshold
-        self.phi = 0
+        self.phi = phi
         self.quiet = quiet
         self.equator = None
         self.warning = False
@@ -104,8 +103,8 @@ class fiber_image():
             self.AutoAlign()
         elif align == 'manual':
             rotationcenter = (self.centerx,self.centery)
-            image = self.rotate_image(image.astype(np.float32),rotationcenter,self.phi*180/np.pi)
-            mask = self.rotate_image(mask.astype(np.uint8),rotationcenter,self.phi*180/np.pi)
+            self.image = self.rotate_image(self.image.astype(np.float32),rotationcenter,self.phi*180/np.pi)
+            self.mask = self.rotate_image(self.mask.astype(np.uint8),rotationcenter,self.phi*180/np.pi)
             
         mask2 = np.copy(self.mask).astype(np.float32)
         mask2 += np.flipud(self.mask)
@@ -126,11 +125,7 @@ class fiber_image():
 def gauss(x, A, x0, sigma):
     return A * np.exp(-(x - x0) ** 2 / (2 * sigma ** 2))    
 
-def EquatorialErrorNGaussians(params,x,y):
-    #Unpack params
-    if len(params)%3:
-        raise Exception("Expecting an input of length 3N for N-Gaussians. Received input length {}".format(len(params)))
-        
+def NGaussiansError(params,x,y):
     z = -y
     for i in range(0,len(params),3):
         A = params[i]
@@ -139,6 +134,48 @@ def EquatorialErrorNGaussians(params,x,y):
         z += gauss(x,A,q,s)
     return np.sum(z**2)
 
+class MuscleMeridonials():
+    """
+    Let's not add to the zoo of inconsistent meridonial nomenclature.
+    All reflections will be labeled by the spacing ~i.e 42.9nm, 14.3nm and so on.
+    """
+
+    def __init__(self,q,y,quiet=True):
+        self.q = q #non-cartesian grid due to combination of saxs/waxs
+        self.values = y
+        self.filtered_values = None
+        self.background = None
+        self.quiet = quiet
+
+    def FindPrincipalMyosinSpacing(method ='WAXS'):
+        """
+         Autonomously find first order myosin spacing.
+         Should be around 42.9nm.
+        """
+
+        if method == 'WAXS':
+            """
+                Uses higher order reflection in waxs detector to find spacing.
+                Best use case is in-air acquisition. 
+            """
+            None
+
+
+        return f"Method {method} not recognized"
+
+
+
+    def FindPrincipalActinSpacing():
+        """
+         Autonomously find first order actin spacing.
+         Should be around 2.7nm.
+        """
+
+def BackgroundRemoval(x,y,interpolator):
+    # Leave it to the user to decide which background to use
+    background = interpolator(x)
+    filtered_values = y - background
+    return background,filtered_values
 
 class MuscleEquator():
     def __init__(self,q,y,quiet = True,zdisc=False):
@@ -175,7 +212,7 @@ class MuscleEquator():
                   guess['A11']    ,guess['q11']    ,guess['s11']]
             bnd =[bounds['A10']    ,bounds['q10']    ,bounds['s10'],
                   bounds['A11']    ,bounds['q11']    ,bounds['s11']]           
-        fit = minimize(EquatorialErrorNGaussians,p0,args = (self.q,self.filtered_values),bounds = bnd,
+        fit = minimize(NGaussiansError,p0,args = (self.q,self.filtered_values),bounds = bnd,
          method = method ,tol = tol,options={'maxiter':maxiter})
 
         #update fit
@@ -232,10 +269,11 @@ class MuscleEquator():
         self.fit['IR']  = 1e-8
         self.fit['y']   = [0]*len(self.q)   
     
-    def BackgroundRemoval(self,interpolator):
-        # self.backgroundinterpolator = deepcopy(interpolator)
-        self.background = interpolator(self.q)
-        self.filtered_values = self.values - self.background
+    #Upgraded from class function to stand-alone static function
+    # def BackgroundRemoval(self,interpolator):
+    #     # self.backgroundinterpolator = deepcopy(interpolator)
+    #     self.background = interpolator(self.q)
+    #     self.filtered_values = self.values - self.background
 
     def ShowRawPlot(self,axis):
         axis.plot(self.q,self.values)
