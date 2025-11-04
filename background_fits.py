@@ -3,6 +3,13 @@ from scipy.spatial import ConvexHull
 from scipy.interpolate import interp1d
 from scipy.ndimage import gaussian_filter1d
 
+
+def BackgroundRemoval(x,y,interpolator):
+    # Leave it to the user to decide which background to use
+    background = interpolator(x)
+    filtered_values = y - background
+    return background,filtered_values
+
 #this one works well for cardiac samples
 def polynomial_background(equator,correction_factor = None):
     #Background removal
@@ -24,17 +31,15 @@ def polynomial_background(equator,correction_factor = None):
     return h
 
 
-def monotonic(equator):
-    q = equator.q
-    y = equator.values
+def monotonic(q,y):
+    # z = np.zeros(y.shape)
 
-    z = np.zeros(y.shape)
-
-    yold = y[0]
-    for i,value in enumerate(y):
-        if value<yold:
-            yold = value
-        z[i] = yold
+    # yold = y[0]
+    # for i,value in enumerate(y):
+    #     if value<yold:
+    #         yold = value
+    #     z[i] = yold
+    z = y
     q = np.append(q,[0.99*q.min(),1.01*q.max()])
     z = np.append(z,[2*z.max(),2*z.max()])
     points = np.array([q,z]).transpose()

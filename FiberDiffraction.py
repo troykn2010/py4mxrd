@@ -1,6 +1,5 @@
 import numpy as np
 import cv2
-from scipy.optimize import minimize
 from copy import deepcopy
 import matplotlib.pyplot as plt
 
@@ -12,11 +11,9 @@ class fiber_image():
         self.align_threshold = align_threshold
         self.phi = phi
         self.quiet = quiet
-        self.equator = None
         self.warning = False
         self.AutoCentering = AutoCentering
 
-        
         #Initial processing
         imagethres = self.mask*(self.image>self.align_threshold)
         imagethres = imagethres.astype(np.float32)
@@ -122,201 +119,31 @@ class fiber_image():
     def ShowImage(self,axis):
         axis.imshow(np.log(self.image+1))
 
-def gauss(x, A, x0, sigma):
-    return A * np.exp(-(x - x0) ** 2 / (2 * sigma ** 2))    
+class Fiber():
+	"""
+	Currently trivial container for various fiber objects.
+	To expand on functionality as need arises
+	"""
+	saxs = None
+	waxs = None
+	meridonials = None
+	equators = None
 
-def NGaussiansError(params,x,y):
-    z = -y
-    for i in range(0,len(params),3):
-        A = params[i]
-        q = params[i+1]
-        s = params[i+2]
-        z += gauss(x,A,q,s)
-    return np.sum(z**2)
 
-class MuscleMeridonials():
+class FiberStack():
     """
-    Let's not add to the zoo of inconsistent meridonial nomenclature.
-    All reflections will be labeled by the spacing ~i.e 42.9nm, 14.3nm and so on.
-    """
-
-    def __init__(self,q,y,quiet=True):
-        self.q = q #non-cartesian grid due to combination of saxs/waxs
-        self.values = y
-        self.filtered_values = None
-        self.background = None
-        self.quiet = quiet
-
-    def FindPrincipalMyosinSpacing(method ='WAXS'):
-        """
-         Autonomously find first order myosin spacing.
-         Should be around 42.9nm.
-        """
-
-        if method == 'WAXS':
-            """
-                Uses higher order reflection in waxs detector to find spacing.
-                Best use case is in-air acquisition. 
-            """
-            None
-
-
-        return f"Method {method} not recognized"
-
-
-
-    def FindPrincipalActinSpacing():
-        """
-         Autonomously find first order actin spacing.
-         Should be around 2.7nm.
-        """
-
-def BackgroundRemoval(x,y,interpolator):
-    # Leave it to the user to decide which background to use
-    background = interpolator(x)
-    filtered_values = y - background
-    return background,filtered_values
-
-class MuscleEquator():
-    def __init__(self,q,y,quiet = True,zdisc=False):
-        #q is a 1d coordinate array in q-spare
-        #equator is a 1d intensity array
-        self.q = q
-        self.values = y
-        self.filtered_values = None
-        self.background = None
-        self.quiet = quiet
-        self.zdisc = zdisc
-
-        #Initialize fit values
-        self.ResetFit()
-
-        # self.I10     = np.sqrt(2*np.pi)*self.A10*self.s10
-        # self.I11     = np.sqrt(2*np.pi)*self.A11*self.s11
-        # self.IR      = self.A11*self.s11/(self.A10+1e-9)/(self.s10+1e-9)
-
-    def NGaussianFit(self,guess,bounds,method = 'Nelder-Mead',tol=1e-8,maxiter=1e4):
-        #Guess is a dictionary with initial values on q10,A10,s10,q11,A11,s11 and optionally q_zdisc, A_zdisc, and s_zdisc. 
-        #Bounds is a dictionary with 2-tuple (low,high) instances on q10,A10,s10,q11,A11,s11 and optionally q_zdisc, A_zdisc, and s_zdisc. 
-        
-        #unpack into list for scipy minimize
-        if self.zdisc:
-            p0 = [guess['A10']    ,guess['q10']    ,guess['s10'],
-                  guess['A11']    ,guess['q11']    ,guess['s11'],
-                  guess['A_zdisc'],guess['q_zdisc'],guess['s_zdisc']]
-            bnd =[bounds['A10']    ,bounds['q10']    ,bounds['s10'],
-                  bounds['A11']    ,bounds['q11']    ,bounds['s11'],
-                  bounds['A_zdisc'],bounds['q_zdisc'],bounds['s_zdisc']]
-        else:
-            p0 = [guess['A10']    ,guess['q10']    ,guess['s10'],
-                  guess['A11']    ,guess['q11']    ,guess['s11']]
-            bnd =[bounds['A10']    ,bounds['q10']    ,bounds['s10'],
-                  bounds['A11']    ,bounds['q11']    ,bounds['s11']]           
-        fit = minimize(NGaussiansError,p0,args = (self.q,self.filtered_values),bounds = bnd,
-         method = method ,tol = tol,options={'maxiter':maxiter})
-
-        #update fit
-        self.fitsuccess = fit.success
-        #10 Gaussian values
-        self.fit['A10'] = fit.x[0] #Amplitude
-        self.fit['q10'] = fit.x[1] #mean
-        self.fit['s10'] = fit.x[2] #standard deviation
-        self.fit['y10'] = gauss(self.q,fit.x[0],fit.x[1],fit.x[2]) #Gaussian trace
-        
-        #11 Gaussian values
-        self.fit['A11'] = fit.x[3] 
-        self.fit['q11'] = fit.x[4]
-        self.fit['s11'] = fit.x[5]
-        self.fit['y11'] = gauss(self.q,fit.x[3],fit.x[4],fit.x[5])  
-
-        #Integrated values
-        self.fit['I10'] = np.sqrt(2*np.pi)*self.fit['A10']*self.fit['s10']
-        self.fit['I11'] = np.sqrt(2*np.pi)*self.fit['A11']*self.fit['s11']
-        self.fit['IR']  = self.fit['A11']*self.fit['s11']/(self.fit['A10']+1e-9)/(self.fit['s10']+1e-9)
-        
-        self.fit['y']   = self.fit['y10'] + self.fit['y11']
-        if self.zdisc:
-            #z-disc Gaussian values
-            self.fit['A_zdisc'] = fit.x[6]
-            self.fit['q_zdisc'] = fit.x[7]
-            self.fit['s_zdisc'] = fit.x[8]
-            self.fit['y_zdisc'] = gauss(self.q,fit.x[6],fit.x[7],fit.x[8]) #Gaussian trace
-            self.fit['y']   += self.fit['y_zdisc']
-                                            
-    def ResetFit(self):
-        self.fit = {}
-        #10 Gaussian values
-        self.fit['A10'] = 1e-8 #Amplitude 
-        self.fit['q10'] = 1e8 #mean
-        self.fit['s10'] = 1e-8 #standard deviation
-        self.fit['y10'] = [0]*len(self.q) #Gaussian trace
-        
-        #11 Gaussian values
-        self.fit['A11'] = 1e-8 
-        self.fit['q11'] = 1e8
-        self.fit['s11'] = 1e-8
-        self.fit['y11'] = 1e-8 
-
-        #z-disc Gaussian values
-        self.fit['A_zdisc'] = 1e-8
-        self.fit['q_zdisc'] = 1e8
-        self.fit['s_zdisc'] = 1e-8
-        self.fit['y_zdisc'] = [0]*len(self.q) #Gaussian trace
-
-        #Integrated values
-        self.fit['I10'] = 1e-8
-        self.fit['I11'] = 1e-8
-        self.fit['IR']  = 1e-8
-        self.fit['y']   = [0]*len(self.q)   
-    
-    #Upgraded from class function to stand-alone static function
-    # def BackgroundRemoval(self,interpolator):
-    #     # self.backgroundinterpolator = deepcopy(interpolator)
-    #     self.background = interpolator(self.q)
-    #     self.filtered_values = self.values - self.background
-
-    def ShowRawPlot(self,axis):
-        axis.plot(self.q,self.values)
-        if self.background is not None:
-            axis.plot(self.q,self.background,color = 'k',zorder = -1)
-        
-    def ShowRawLogLog(self,axis):
-        axis.loglog(self.q,self.values)
-        if self.background is not None:
-            axis.loglog(self.q,self.background)
-        
-    def ShowFilteredPlot(self,axis):
-        axis.plot(self.q,self.filtered_values)
-        if self.fit['y'] is not None:
-            axis.plot(self.q,self.fit['y10'])
-            axis.plot(self.q,self.fit['y11'])
-            axis.plot(self.q,self.fit['y'])
-            if self.zdisc:
-                axis.plot(self.q,self.fit['y_zdisc'])
-        
-    def ShowFilteredLogLog(self,axis):
-        axis.loglog(self.q,self.filtered_values)
-        if self.fit['y'] is not None:
-            axis.loglog(self.q,self.fit['y10'])
-            axis.loglog(self.q,self.fit['y11'])
-            axis.loglog(self.q,self.fit['y'])
-            if self.zdisc:
-                axis.loglog(self.q,self.fit['y_zdisc'])
-        
-
-class MuscleStack():
-    """
-    List of fiber_image objects
+    List of fiber containers with slightly specialized list operations.
+    Containers are assumed to be homogenous in structure
     """
     def __init__(self,stack):
         self.stack = stack
         self.include = [True]*len(stack)
 
-    def append(self,myosaxs):
+    def append(self,Fiber):
         """
-        Append new myosaxs object
+        Append new Fiber container
         """
-        self.stack.append(myosaxs)
+        self.stack.append(Fiber)
         self.include.append(True)
         
     def AndInclude(self,newinclude):
@@ -339,16 +166,30 @@ class MuscleStack():
             if ~self.include[i]:
                 self.stack.pop(i)
                 self.include.pop(i)
+
+    def ReturnSubStack(self,index):
+    	return FiberStack([self.stack[i] for i in index])
                 
-    def getImages(self,exclude = True):
-        """
-        Returns stack of fiber images as a list
-        optional input exclude = True ignores all entries that have been excluded
-        """
+    # def getImages(self,exclude = True):
+    #     """
+    #     Returns stack of fiber images as a list
+    #     optional input exclude = True ignores all entries that have been excluded
+    #     """
+    #     if exclude:
+    #         return [myosaxs.image for (include,myosaxs) in zip(self.include,self.stack) if include]
+    #     else:
+    #         return [myosaxs.image for myosaxs in self.stack]
+    def getAttribute(self,Attribute,exclude=True):
         if exclude:
-            return [myosaxs.image for (include,myosaxs) in zip(self.include,self.stack) if include]
+            return [getattr(Fiber,Attribute) for (include,Fiber) in zip(self.include,self.stack) if include]
         else:
-            return [myosaxs.image for myosaxs in self.stack]
+            return [getattr(Fiber,Attribute)  for Fiber in self.stack]
+
+    def getSubAttribute(self,Attribute,SubAttribute,exclude=True):
+        if exclude:
+            return [getattr(getattr(Fiber,Attribute),SubAttribute) for (include,Fiber) in zip(self.include,self.stack) if include]
+        else:
+            return [getattr(getattr(Fiber,Attribute),SubAttribute)  for Fiber in self.stack]
 
     def getEquatorAttribute(self,Attribute,exclude = True):
         """
@@ -378,4 +219,5 @@ class MuscleStack():
         else:
             return [getattr(myosaxs.equator,Attribute) for myosaxs in self.stack]
             
+
         
