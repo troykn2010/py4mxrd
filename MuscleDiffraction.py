@@ -46,7 +46,7 @@ class MuscleLineData():
 
         p0 = [1,a1/a0,(x.max()-x.min())/6] #[0th,1st,2nd moments]
         if bounds == None:
-            bounds =[(0,1) ,(x.min(),x.max()),(1e-4,(x.max()-x.min())/2+1e-4)]
+            bounds =[(0,1) ,(x.min(),x.max()),(1e-5,(x.max()-x.min())/2+1e-4)]
 
         fit = minimize(NGaussiansError,p0,args = (x,y),bounds = bounds,
         method = fitmethod ,tol = tol,options={'maxiter':maxiter})
@@ -184,11 +184,11 @@ class MuscleEquator(MuscleLineData):
         self.IR = None
         # self.I10     = np.sqrt(2*np.pi)*self.A10*self.s10
         # self.I11     = np.sqrt(2*np.pi)*self.A11*self.s11
-    def Find_10(self,dmin = 32,dmax = 44,quiet = True):
+    def Find_10(self,dmin = 32,dmax = 44,quiet = True,bounds = None):
         bool = np.logical_and(self.q>1/dmax,self.q<1/dmin)
         q = self.q[bool]
         y = self.filtered_values[bool]        
-        peak = self.FitSingleGaussian(q,y,label = '10')
+        peak = self.FitSingleGaussian(q,y,label = '10',bounds = bounds)
         self.d10 = 1/peak['m1']
 
     def EquatorFit(self,keys = ['10','11'],delta = 0.5,quiet = True):
@@ -197,7 +197,7 @@ class MuscleEquator(MuscleLineData):
             listpeaks.append(self.peaks[key])
         newlistpeaks = self.NGaussianFit(listpeaks,delta = delta)
         for i,key in enumerate(keys):
-            self.peaks[key]= listpeaks[i]
+            self.peaks[key]= newlistpeaks[i]
     def ComputeIR(self):
         self.d11 = 1/self.peaks['11']['m1']
         self.IR = self.peaks['11']['Area']/(self.peaks['10']['Area']+1e-9)

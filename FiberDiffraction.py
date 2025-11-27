@@ -47,25 +47,54 @@ class fiber_image():
         return result
     
     @staticmethod
-    def CenterByPadding(image,centeri,centerj):
+    def CenterByPadding(image,centeri,centerj,subpixel=True,interp='Default'):
+        #Enforces NxM where N and M odd. So N//2 and M//2 is always at center of image
+
         #numpy ij indexing
         l = image.shape[0]
         m = image.shape[1]
-        #Move to center
-        if 2*centeri<=l:
-            pad0 = (int(l-2*centeri),0)
-        else:
-            pad0 = (0,int(2*centeri-l))
 
-        if 2*centerj<=m:
-            pad1 = (int(m-2*centerj),0)
-        else:
-            pad1 = (0,int(2*centerj-m))
+        #Move to center by zeropadding image
+        lm1 = l-1
+        int_centeri = int(centeri)
+        int_centerj = int(centerj)
+        if int_centeri >= l//2:
+            pad0 = (0,2*int_centeri-lm1)
+        elif centeri < l//2:
+            pad0 = (lm1-2*int_centeri,0)
+
+        mm1 = m-1
+        if int_centerj >= m//2:
+            pad1 = (0,2*int_centerj-mm1)
+        elif int_centerj < m//2:
+            pad1 = (mm1-2*int_centerj,0)
         image = np.pad(image, (pad0,pad1)) 
 
         #Pad again to avoid information lost when rotating
         # R = int(np.ceil(np.sqrt((l//2)**2 + (m//2)**2)))
         # image = np.pad(image, (  (R-l//2,R-l//2),(R-m//2,R-m//2) )  )
+
+        if subpixel:
+            #Subpixel shift to corner of pixel 
+            if interp == 'Default':
+                interp = cv2.INTER_LINEAR
+            # image = np.pad(image, ( (1,1),(1,1))) #pad all sides by 1 pixel to avoid info loss  #Just doesn't matter enough for large images
+            l2 = image.shape[0]
+            m2 = image.shape[1]
+
+            ishift = centeri % 1
+            jshift = centerj % 1
+            # cv2 translation matrix
+            translation_matrix = np.array([
+                [1, 0, -ishift],
+                [0, 1, -ishift]
+            ], dtype=np.float32)
+            image = cv2.warpAffine(src=image,
+                    M=translation_matrix,
+                    dsize=(m2, l2),
+                    flags = interp)
+
+        # return image
         return image    
 
     def AutoAlign(self):
@@ -86,10 +115,16 @@ class fiber_image():
         self.mask = self.rotate_image(self.mask.astype(np.uint8),(self.centerx,self.centery),phi*180/np.pi)
         self.phi = phi #Keep track of image rotation
         
-    def RotateAndApplySymmetry(self,align='auto'):
-        self.image = self.CenterByPadding(self.image*self.mask,self.centeri,self.centerj)
-        self.mask = self.CenterByPadding(self.mask,self.centeri,self.centerj)
-
+    def RotateAndApplySymmetry(self,align='auto',subpixel=True):
+        if subpixel:
+            self.image = self.CenterByPadding(self.image.astype(np.float32),self.centeri,self.centerj,subpixel=True)
+            self.mask = self.CenterByPadding(self.mask.astype(np.uint8),self.centeri,self.centerj,subpixel=True,interp = cv2.INTER_NEAREST)
+            kernel = np.ones((3,3),dtype = np.uint8)
+            self.mask = cv2.erode(self.mask,kernel)
+            self.image = self.image*self.mask
+        else:
+            self.image = self.CenterByPadding(self.image*self.mask,self.centeri,self.centerj,subpixel=False)
+            self.mask = self.CenterByPadding(self.mask,self.centeri,self.centerj,subpixel=False)
         #center is now in the middle of the image
         self.centeri = self.image.shape[0]//2
         self.centerj = self.image.shape[1]//2
@@ -115,7 +150,8 @@ class fiber_image():
         output += np.flipud(np.fliplr(self.image))
 
         self.image = output/mask2
-        
+        self.output = output
+        self.mask2 = mask2
     def ShowImage(self,axis):
         axis.imshow(np.log(self.image+1))
 
