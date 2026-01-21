@@ -150,8 +150,8 @@ class fiber_image():
         output += np.flipud(np.fliplr(self.image))
 
         self.image = output/mask2
-        self.output = output
-        self.mask2 = mask2
+        # self.output = output
+        # self.mask2 = mask2
     def ShowImage(self,axis):
         axis.imshow(np.log(self.image+1))
 
@@ -197,8 +197,8 @@ class FiberStack():
         Reminder: This is a destructive function
         """
         #Walk backwards and pop
-        N = len(stack)
-        for i in range(N,0,-1):
+        N = len(self.stack)
+        for i in range(N-1,0,-1):
             if ~self.include[i]:
                 self.stack.pop(i)
                 self.include.pop(i)
@@ -257,3 +257,16 @@ class FiberStack():
             
 
         
+    # def Export2CSV(self, filename ,ListMuscleLineDataName):
+    #     #First, figure out all columns
+    #     fiber = self.stack[0]
+    #     ListPeaks = []
+    #     for MuscleLineDataName in ListMuscleLineDataName:
+    #         peaks = getattr(getattr(fiber,MuscleLineDataName),'peaks')
+    #         for key in peaks.keys():
+    #             ListPeaks.append([MuscleLineDataName,key])
+
+    #     for fiber in self.stack:
+    #         for s in ListPeaks:
+    #             peak = getattr(fiber,s[0][0]).peaks[s[0][1]]
+

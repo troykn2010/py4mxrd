@@ -1,8 +1,7 @@
 import numpy as np
-import cv2
 from scipy.optimize import minimize
 from copy import deepcopy
-import matplotlib.pyplot as plt
+from scipy.ndimage import gaussian_filter1d
 
 def gauss(x, A, x0, sigma):
     return A * np.exp(-(x - x0) ** 2 / (2 * sigma ** 2))    
@@ -28,7 +27,7 @@ class MuscleLineData():
         self.fitted_values = None
 
 
-    def FitSingleGaussian(self,x,y,bounds = None,label = None, fitmethod = 'Nelder-Mead',tol=1e-8,maxiter=1e4,quiet=True):
+    def FitSingleGaussian(self,x,y,label = None,bounds = None, fitmethod = 'Nelder-Mead',tol=1e-8,maxiter=1e4,quiet=True):
         """
             Presume a clean gaussian that's roughly centered.
         """
@@ -46,7 +45,7 @@ class MuscleLineData():
 
         p0 = [1,a1/a0,(x.max()-x.min())/6] #[0th,1st,2nd moments]
         if bounds == None:
-            bounds =[(0,1) ,(x.min(),x.max()),(1e-5,(x.max()-x.min())/2+1e-4)]
+            bounds =[(0,1) ,(x.min(),x.max()),(1e-5,(x.max()-x.min())/2+1e-6)]
 
         fit = minimize(NGaussiansError,p0,args = (x,y),bounds = bounds,
         method = fitmethod ,tol = tol,options={'maxiter':maxiter})
@@ -62,6 +61,8 @@ class MuscleLineData():
         self.peaks[label]['m0'] = m0
         self.peaks[label]['Area'] = np.sqrt(2*np.pi)*m0*m2
         self.peaks[label]['fitsuccess'] = success
+        self.peaks[label]['qmin'] = x.min()
+        self.peaks[label]['qmax'] = x.max()+1e-6
 
         if quiet==False:
             print(fit.success)
@@ -74,14 +75,25 @@ class MuscleLineData():
         b = 1 - delta
         p0 = []
         bnd = []
+
+        qmin_all = self.q.max()
+        qmax_all = self.q.min()
         for peak in listpeaks:
+            qmin_all = min(qmin_all,peak['qmin'])
+            qmax_all = max(qmax_all,peak['qmax'])
             m0 = peak['m0']
             m1 = peak['m1']
             m2 = peak['m2']
             p0 = p0 +[m0,m1,m2+1e-7] #m2=0 generates an division by zero error
-            bnd= bnd + [(m0*b,m0*a),(m1*b,m1*a),(m2*b,m2*a)]
 
-        fit = minimize(NGaussiansError,p0,args = (self.q,self.filtered_values),bounds = bnd,
+            bnd= bnd + [(m0*b,m0*a),
+                        (max(m1*b,peak['qmin']),min(m1*a,peak['qmax'])), 
+                        (m2*b,min(m2*a,(peak['qmax']-peak['qmin'])/2))]
+
+        #Each peak has a qmin,qmax pair that defines the sandbox limits.
+        #Take the largest range that contains each peak's limits
+        bool = np.logical_and(self.q>qmin_all,self.q<qmax_all)
+        fit = minimize(NGaussiansError,p0,args = (self.q[bool],self.filtered_values[bool]),bounds = bnd,
          method = method ,tol = tol,options={'maxiter':maxiter})
         
         #update peaks
@@ -94,6 +106,15 @@ class MuscleLineData():
             listpeaks[j]['fitsuccess'] = fit.success
             j = j+1
         return listpeaks
+
+    def NGaussianFitKeys(self,keys,**kwargs):
+        #Wrapper around NGaussianFit to take in keys as argument
+        listpeaks = []
+        for key in keys:
+            listpeaks.append(self.peaks[key])
+        newlistpeaks = self.NGaussianFit(listpeaks,**kwargs)
+        for i,key in enumerate(keys):
+            self.peaks[key]= newlistpeaks[i]
 
     def Peak_Data(self,peak):
         if peak['m2']>1e-6:
@@ -111,9 +132,9 @@ class MuscleLineData():
         for key in keys:
             self.fitted_values += self.Peak_Data(self.peaks[key])
 
-class MuscleMeridonials(MuscleLineData):
+class MuscleMeridionals(MuscleLineData):
     """
-    Let's not add to the zoo of inconsistent meridonial nomenclature.
+    Let's not add to the zoo of inconsistent meridional nomenclature.
     All reflections will be labeled by the spacing ~i.e 42.9nm, 14.3nm and so on.
     """
     def __init__(self,q,y,quiet = True):
@@ -121,7 +142,7 @@ class MuscleMeridonials(MuscleLineData):
         self.PrincipleMyosinSpacing = None
         self.PrincipleMyosinSpacing = None
 
-    def FindPrincipalActinSpacing(self,method = '13thOrder',quiet = True):
+    def FindPrincipleActinSpacing(self,method = '13thOrder',quiet = True):
         """
          Autonomously find gobular actin on the 13th order
          Should be around 2.7nm.
@@ -134,7 +155,7 @@ class MuscleMeridonials(MuscleLineData):
         self.PrincipleActinSpacing = 13/peak['m1']
         return peak
 
-    def FindPrincipalMyosinSpacing(self,method ='3rdOrder',quiet = True):
+    def FindPrincipleMyosinSpacing(self,method ='3rdOrder',quiet = True):
         """
          Autonomously find first order myosin spacing.
          Should be around 42.9nm.
@@ -154,7 +175,7 @@ class MuscleMeridonials(MuscleLineData):
             bool = np.logical_and(self.q>1/15.5,self.q<1/13.5) #Assume the third order refleciton is between 13.5nm and 15.5nm
             q = self.q[bool]
             y = self.filtered_values[bool]
-            peak = self.FitSingleGaussian(q,y,quiet=quiet)
+            peak = self.FitSingleGaussian(q,y,label ='AutoM3',quiet=quiet)
 
             self.PrincipleMyosinSpacing = 3/peak['m1']
 
@@ -191,6 +212,7 @@ class MuscleEquator(MuscleLineData):
         peak = self.FitSingleGaussian(q,y,label = '10',bounds = bounds)
         self.d10 = 1/peak['m1']
 
+    #Depreciated. Use NGaussianFitKeys
     def EquatorFit(self,keys = ['10','11'],delta = 0.5,quiet = True):
         listpeaks = []
         for key in keys:
@@ -198,110 +220,9 @@ class MuscleEquator(MuscleLineData):
         newlistpeaks = self.NGaussianFit(listpeaks,delta = delta)
         for i,key in enumerate(keys):
             self.peaks[key]= newlistpeaks[i]
+
+
     def ComputeIR(self):
         self.d11 = 1/self.peaks['11']['m1']
         self.IR = self.peaks['11']['Area']/(self.peaks['10']['Area']+1e-9)
         self.fitsuccess = np.all([self.peaks[key]['fitsuccess'] for key in self.peaks.keys()])
-
-    # def NGaussianFit(self,guess,bounds,method = 'Nelder-Mead',tol=1e-8,maxiter=1e4):
-    #     #Guess is a dictionary with initial values on q10,A10,s10,q11,A11,s11 and optionally q_zdisc, A_zdisc, and s_zdisc. 
-    #     #Bounds is a dictionary with 2-tuple (low,high) instances on q10,A10,s10,q11,A11,s11 and optionally q_zdisc, A_zdisc, and s_zdisc. 
-        
-    #     #unpack into list for scipy minimize
-    #     if self.zdisc:
-    #         p0 = [guess['A10']    ,guess['q10']    ,guess['s10'],
-    #               guess['A11']    ,guess['q11']    ,guess['s11'],
-    #               guess['A_zdisc'],guess['q_zdisc'],guess['s_zdisc']]
-    #         bnd =[bounds['A10']    ,bounds['q10']    ,bounds['s10'],
-    #               bounds['A11']    ,bounds['q11']    ,bounds['s11'],
-    #               bounds['A_zdisc'],bounds['q_zdisc'],bounds['s_zdisc']]
-    #     else:
-    #         p0 = [guess['A10']    ,guess['q10']    ,guess['s10'],
-    #               guess['A11']    ,guess['q11']    ,guess['s11']]
-    #         bnd =[bounds['A10']    ,bounds['q10']    ,bounds['s10'],
-    #               bounds['A11']    ,bounds['q11']    ,bounds['s11']]           
-    #     fit = minimize(NGaussiansError,p0,args = (self.q,self.filtered_values),bounds = bnd,
-    #      method = method ,tol = tol,options={'maxiter':maxiter})
-
-    #     #update fit
-    #     self.fitsuccess = fit.success
-    #     #10 Gaussian values
-    #     self.fit['A10'] = fit.x[0] #Amplitude
-    #     self.fit['q10'] = fit.x[1] #mean
-    #     self.fit['s10'] = fit.x[2] #standard deviation
-    #     self.fit['y10'] = gauss(self.q,fit.x[0],fit.x[1],fit.x[2]) #Gaussian trace
-        
-    #     #11 Gaussian values
-    #     self.fit['A11'] = fit.x[3] 
-    #     self.fit['q11'] = fit.x[4]
-    #     self.fit['s11'] = fit.x[5]
-    #     self.fit['y11'] = gauss(self.q,fit.x[3],fit.x[4],fit.x[5])  
-
-    #     #Integrated values
-    #     self.fit['I10'] = np.sqrt(2*np.pi)*self.fit['A10']*self.fit['s10']
-    #     self.fit['I11'] = np.sqrt(2*np.pi)*self.fit['A11']*self.fit['s11']
-    #     self.fit['IR']  = self.fit['A11']*self.fit['s11']/(self.fit['A10']+1e-9)/(self.fit['s10']+1e-9)
-        
-    #     self.fit['y']   = self.fit['y10'] + self.fit['y11']
-    #     if self.zdisc:
-    #         #z-disc Gaussian values
-    #         self.fit['A_zdisc'] = fit.x[6]
-    #         self.fit['q_zdisc'] = fit.x[7]
-    #         self.fit['s_zdisc'] = fit.x[8]
-    #         self.fit['y_zdisc'] = gauss(self.q,fit.x[6],fit.x[7],fit.x[8]) #Gaussian trace
-    #         self.fit['y']   += self.fit['y_zdisc']
-                                            
-    # def ResetFit(self):
-    #     self.fit = {}
-    #     #10 Gaussian values
-    #     self.fit['A10'] = 1e-8 #Amplitude 
-    #     self.fit['q10'] = 1e8 #mean
-    #     self.fit['s10'] = 1e-8 #standard deviation
-    #     self.fit['y10'] = [0]*len(self.q) #Gaussian trace
-        
-    #     #11 Gaussian values
-    #     self.fit['A11'] = 1e-8 
-    #     self.fit['q11'] = 1e8
-    #     self.fit['s11'] = 1e-8
-    #     self.fit['y11'] = 1e-8 
-
-    #     #z-disc Gaussian values
-    #     self.fit['A_zdisc'] = 1e-8
-    #     self.fit['q_zdisc'] = 1e8
-    #     self.fit['s_zdisc'] = 1e-8
-    #     self.fit['y_zdisc'] = [0]*len(self.q) #Gaussian trace
-
-    #     #Integrated values
-    #     self.fit['I10'] = 1e-8
-    #     self.fit['I11'] = 1e-8
-    #     self.fit['IR']  = 1e-8
-    #     self.fit['y']   = [0]*len(self.q)   
-    
-
-    # def ShowRawPlot(self,axis):
-    #     axis.plot(self.q,self.values)
-    #     if self.background is not None:
-    #         axis.plot(self.q,self.background,color = 'k',zorder = -1)
-        
-    # def ShowRawLogLog(self,axis):
-    #     axis.loglog(self.q,self.values)
-    #     if self.background is not None:
-    #         axis.loglog(self.q,self.background)
-        
-    # def ShowFilteredPlot(self,axis):
-    #     axis.plot(self.q,self.filtered_values)
-    #     if self.fit['y'] is not None:
-    #         axis.plot(self.q,self.fit['y10'])
-    #         axis.plot(self.q,self.fit['y11'])
-    #         axis.plot(self.q,self.fit['y'])
-    #         if self.zdisc:
-    #             axis.plot(self.q,self.fit['y_zdisc'])
-        
-    # def ShowFilteredLogLog(self,axis):
-    #     axis.loglog(self.q,self.filtered_values)
-    #     if self.fit['y'] is not None:
-    #         axis.loglog(self.q,self.fit['y10'])
-    #         axis.loglog(self.q,self.fit['y11'])
-    #         axis.loglog(self.q,self.fit['y'])
-    #         if self.zdisc:
-    #             axis.loglog(self.q,self.fit['y_zdisc'])
