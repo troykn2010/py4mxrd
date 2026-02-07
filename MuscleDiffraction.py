@@ -40,12 +40,12 @@ class MuscleLineData():
 
         amplitude = y.max()
         y = y/y.max()
-        a0 = np.trapz(y,x)
-        a1 = np.trapz(y*x,x)
+        a0 = np.trapz(y,x) +1e-10
+        a1 = np.trapz(y*x,x) +1e-10
 
         p0 = [1,a1/a0,(x.max()-x.min())/6] #[0th,1st,2nd moments]
         if bounds == None:
-            bounds =[(0,1) ,(x.min(),x.max()),(1e-5,(x.max()-x.min())/2+1e-6)]
+            bounds =[(0,1) ,(x.min(),x.max()),(1e-5,(x.max()-x.min())/2+1e-10)]
 
         fit = minimize(NGaussiansError,p0,args = (x,y),bounds = bounds,
         method = fitmethod ,tol = tol,options={'maxiter':maxiter})
@@ -84,12 +84,12 @@ class MuscleLineData():
             m0 = peak['m0']
             m1 = peak['m1']
             m2 = peak['m2']
-            p0 = p0 +[m0,m1,m2+1e-7] #m2=0 generates an division by zero error
+            p0 = p0 +[m0,m1,m2+1e-10] #m2=0 generates an division by zero error
 
             bnd= bnd + [(m0*b,m0*a),
-                        (max(m1*b,peak['qmin']),min(m1*a,peak['qmax'])), 
-                        (m2*b,min(m2*a,(peak['qmax']-peak['qmin'])/2))]
-
+                        (peak['qmin'],peak['qmax']), 
+                        (peak['smin'],peak['smax'])
+                        ]
         #Each peak has a qmin,qmax pair that defines the sandbox limits.
         #Take the largest range that contains each peak's limits
         bool = np.logical_and(self.q>qmin_all,self.q<qmax_all)
@@ -141,6 +141,62 @@ class MuscleMeridionals(MuscleLineData):
         super().__init__(q=q,y=y,quiet=quiet)
         self.PrincipleMyosinSpacing = None
         self.PrincipleMyosinSpacing = None
+
+    def FitClusterWithGaussians(self,keys,delta= 0.5,method = 'Nelder-Mead',tol=1e-8,maxiter=1e4):     
+        #Use gaussian peaks from generated from FitSingleGaussian as an initial guess for an N-Gaussian fit.
+        # Best when multiple gaussians are overlapping
+        listpeaks = []
+        for key in keys:
+            listpeaks.append(self.peaks[key])
+
+        a = 1 + delta
+        b = 1 - delta
+        p0 = []
+        bnd = []
+
+        qmin_all = self.q.max()
+        qmax_all = self.q.min()
+        for peak in listpeaks:
+            qmin_all = min(qmin_all,peak['qmin'])
+            qmax_all = max(qmax_all,peak['qmax'])
+            m0 = peak['m0']
+            m1 = peak['m1']
+            m2 = peak['m2']
+            p0 = p0 +[m0,m1] #m2=0 generates an division by zero error
+
+            bnd= bnd + [(m0*b,m0*a),
+                        (peak['qmin'],peak['qmax'])
+                        ]
+        p0 = p0 + [m2+1e-10]
+        bnd = bnd + [(peak['smin'],peak['smax'])]
+
+        #Each peak has a qmin,qmax pair that defines the sandbox limits.
+        #Take the largest range that contains each peak's limits
+        bool = np.logical_and(self.q>qmin_all,self.q<qmax_all)
+        fit = minimize(self.NGaussiansClusterError,p0,args = (self.q[bool],self.filtered_values[bool]),bounds = bnd,
+         method = method ,tol = tol,options={'maxiter':maxiter})
+
+        #update peaks
+        j = 0
+        for i in range(0,len(fit.x)-1,2):
+            listpeaks[j]['m0'] = fit.x[i]
+            listpeaks[j]['m1'] = fit.x[i+1]
+            listpeaks[j]['m2'] = fit.x[-1]
+            listpeaks[j]['Area'] = np.sqrt(2*np.pi)*fit.x[i]*fit.x[-1]
+            listpeaks[j]['fitsuccess'] = fit.success
+            j = j+1
+
+        for i,key in enumerate(keys):
+            self.peaks[key]= listpeaks[i]
+
+    def NGaussiansClusterError(self,params,x,y):
+        z = -y
+        s = params[-1]
+        for i in range(0,len(params)-1,2):
+            A = params[i]
+            q = params[i+1]
+            z += gauss(x,A,q,s)
+        return np.sum(z**2)
 
     def FindPrincipleActinSpacing(self,method = '13thOrder',quiet = True):
         """
