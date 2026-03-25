@@ -86,7 +86,7 @@ class fiber_image():
             jshift = centerj % 1
             # cv2 translation matrix
             translation_matrix = np.array([
-                [1, 0, -ishift],
+                [1, 0, -jshift],
                 [0, 1, -ishift]
             ], dtype=np.float32)
             image = cv2.warpAffine(src=image,
@@ -154,6 +154,9 @@ class fiber_image():
         # self.mask2 = mask2
     def ShowImage(self,axis):
         axis.imshow(np.log(self.image+1))
+
+    def copy(self):
+        return deepcopy(self)
 
 class Fiber():
 	"""
