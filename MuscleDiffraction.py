@@ -27,7 +27,6 @@ def NGaussiansClusterError(params,x,y):
     return np.sum(z**2)
 
 class MuscleLineData():
-
     def __init__(self,q,y,quiet = True):
         self.q = q
         self.values = y
@@ -192,3 +191,36 @@ class MuscleLineData():
 
     def copy(self):
         return deepcopy(self)
+
+
+def MuscleAreaData():
+"""
+Rectilinear grid
+Everything is built on nd arrays
+"""
+    def __init__(self,q0,q1,values,quiet = True):
+        self.q0 = q0
+        self.q1 = q1
+        self.values = values
+        self.filtered_values = None
+        self.background = None
+        self.quiet = quiet  
+        self.peaks = {}
+        self.fitted_values = None
+
+    def ROI(self,q0_range = [-1e10,1e10],q1_range = [-1e10]):
+        q0_min = max(q0_range[0],self.q0.min())
+        q0_max = min(q0_range[1],self.q0.max())
+        q1_min = max(q1_range[0],self.q1.min())
+        q1_max = min(q1_range[1],self.q1.max())
+
+        bool0 = np.logical_and(self.q0>=q0_min,self.q0<q0_max)
+        bool1 = np.logical_and(self.q1>=q1_min,self.q1<q1_max)
+        values = self.values[bool0, bool1]
+        return MuscleAreaData(self.q0[bool0],self.q1[bool1],values,self.quiet)
+
+    def BackgroundRemoval(self,interpolator):
+        # self.backgroundinterpolator = deepcopy(interpolator)
+        self.background = interpolator(self.q0,self.q1)
+        self.filtered_values = self.values - self.background
+
