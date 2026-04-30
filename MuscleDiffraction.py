@@ -1,9 +1,11 @@
-#https://github.com/troykn2010/py4mxrd.git. Pulled on April 8 2026
-
 import numpy as np
 from scipy.optimize import minimize
 from copy import deepcopy
 from scipy.ndimage import gaussian_filter1d
+from .background_fits import monotonic
+
+cfactor = 2*3.14159/10#1/nm to 1/angstroms
+
 
 def gauss(x, A, x0, sigma):
     return A * np.exp(-(x - x0) ** 2 / (2 * sigma ** 2))    
@@ -193,20 +195,21 @@ class MuscleLineData():
         return deepcopy(self)
 
 
-def MuscleAreaData():
-"""
-Rectilinear grid
-Everything is built on nd arrays
-"""
-    def __init__(self,q0,q1,values,quiet = True):
+class MuscleAreaData():
+    """
+    Rectilinear grid
+    Everything is built on nd arrays
+    """
+    def __init__(self,q0_label,q0,q1_label,q1,values,quiet = True):
         self.q0 = q0
+        self.q0_label = q0_label #Ask user to explicitly state coordinate directions. x,y,i,j,radial,azimuthal
         self.q1 = q1
+        self.q1_label = q1_label #Ask user to explicitly state coordinate directions. x,y,i,j,radial,azimuthal
+
         self.values = values
         self.filtered_values = None
         self.background = None
         self.quiet = quiet  
-        self.peaks = {}
-        self.fitted_values = None
 
     def ROI(self,q0_range = [-1e10,1e10],q1_range = [-1e10]):
         q0_min = max(q0_range[0],self.q0.min())
@@ -216,11 +219,111 @@ Everything is built on nd arrays
 
         bool0 = np.logical_and(self.q0>=q0_min,self.q0<q0_max)
         bool1 = np.logical_and(self.q1>=q1_min,self.q1<q1_max)
-        values = self.values[bool0, bool1]
-        return MuscleAreaData(self.q0[bool0],self.q1[bool1],values,self.quiet)
 
-    def BackgroundRemoval(self,interpolator):
-        # self.backgroundinterpolator = deepcopy(interpolator)
-        self.background = interpolator(self.q0,self.q1)
-        self.filtered_values = self.values - self.background
 
+        values = self.values[bool0,:]
+        values = values[:,bool1]
+        return MuscleAreaData(q0_label = self.q0_label,
+                              q0 = self.q0[bool0],
+                              q1_label =self.q1_label,
+                              q1 = self.q1[bool1],
+                              values = values,
+                              quiet = self.quiet)
+
+    def Reduce2LineData(self,reduce_direction):
+        if reduce_direction == self.q0_label:
+            q = self.q1
+            axis = 0
+        elif reduce_direction == self.q1_label:
+            q = self.q0
+            axis = 1
+        else:
+            raise Exception(f"reduce_direction needs to be either {self.q0_label} or {self.q1_label}")
+        y = np.mean(self.values,axis = axis)
+        y = np.squeeze(y) #drop empty dimensions
+        LineData = MuscleLineData(q,y)
+        return LineData
+
+    def SubtractBackground_Monotonic_ConvexHull(self,direction):
+        if direction == self.q0_label:
+            values = self.values.T
+            q = self.q0
+        elif direction == self.q1_label:
+            values = self.values
+            q = self.q1
+        else:
+            raise Exception(f"direction needs to be either {self.q0_label} or {self.q1_label}")
+
+        background = np.zeros(values.shape)
+        filtered_values = np.zeros(values.shape)
+        for i in range(len(values)):
+            line = values[i]
+            h = monotonic(q,line)
+            background[i] = h(q)
+            filtered_values[i] = line-background[i]
+
+        if direction == self.q0_label:
+            self.filtered_values = filtered_values.T
+            self.background = background.T
+        elif direction == self.q1_label:
+            self.filtered_values = filtered_values
+            self.background = background
+
+
+    def proc_box(self,box):
+        """
+            example box:
+
+            c = 2*3.14159/10#1/nm to 1/angstroms
+            equator_box = {
+                'label':'equator',
+                'background_direction': 'x',
+                'reduce_direction': 'y',
+                'q0_min': 1/80 * c,
+                'q0_max': 1/15  * c,
+                'q1_min': 0,
+                'q1_max': 0.005 * c,
+                'PrincipalSpacing':38, #nm
+                'peaks':e_peaks,
+                'update_keys':[ ['10' ,'11']],
+                'update_method': 'NGaussian'
+            }
+        """
+        d0 = box['PrincipalSpacing']
+        q0 = (1/d0)*cfactor
+
+        boxAreaData = self.ROI(q0_range=[box['q0_min'],box['q0_max']],
+                               q1_range=[box['q1_min'],box['q1_max']],)
+
+        if 'radial' in box['label']:
+            #Hacky
+            boxAreaData.SubtractBackground_Monotonic_ConvexHull(direction=box['background_direction'])
+            boxAreaData.values = boxAreaData.filtered_values
+            LineData = boxAreaData.Reduce2LineData(reduce_direction = box['reduce_direction'])
+            #Background subtract already happened. This just sets filtered values to values and background to zero
+            LineData.filtered_values = LineData.values
+            LineData.background = 0*LineData.q
+        else:
+            LineData = boxAreaData.Reduce2LineData(reduce_direction = box['reduce_direction'])
+            LineData.BackgroundRemoval(monotonic(LineData.q,LineData.values))
+        for key in box['peaks'].keys():
+            peak = box['peaks'][key]
+            bounds = [(0,1),(q0*peak['relative_qmin'],q0*peak['relative_qmax']),(peak['absolute_smin'],peak['absolute_smax']) ] #bounds on single gaussian fit
+            bool = np.logical_and(LineData.q>=q0*peak['relative_qmin'],LineData.q<=q0*peak['relative_qmax'])
+            LineData.FitSingleGaussian(LineData.q[bool],LineData.filtered_values[bool],label = key,maxiter = 1000,bounds = bounds) #initial fits
+            LineData.peaks[key]['smin'] = peak['absolute_smin']
+            LineData.peaks[key]['smax'] = peak['absolute_smax']
+
+        for update_keys in box['update_keys']:
+            if box['update_method'] == 'NGaussian':
+                LineData.NGaussianFitKeys(update_keys,maxiter=1000,delta = 0.5) #Fit 10 and 11 together using initial fits as guesses
+            elif box['update_method'] == 'NGaussianCluster':
+                LineData.FitClusterWithGaussians(update_keys,maxiter=1000)
+            else:
+                print('Update method not recognized')
+        
+        LineData.ComputeFittedValues(box['peaks'].keys())
+        return LineData
+
+    def copy(self):
+        return deepcopy(self)
