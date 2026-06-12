@@ -32,21 +32,15 @@ def polynomial_background(equator,correction_factor = None):
 
 
 def monotonic(q,y):
-    # z = np.zeros(y.shape)
-
-    # yold = y[0]
-    # for i,value in enumerate(y):
-    #     if value<yold:
-    #         yold = value
-    #     z[i] = yold
     z = y
     q = np.append(q,[0.99*q.min(),1.01*q.max()])
-    z = np.append(z,[2*z.max(),2*z.max()])
+    z = np.append(z,[2*z.max()+1e-12,2*z.max()+1e-12])
     points = np.array([q,z]).transpose()
     hull = ConvexHull(points)
     hullpoints = np.array([[points[vertex, 0], points[vertex, 1]] for vertex in hull.vertices ])
     h = interp1d(hullpoints[:,0],hullpoints[:,1],bounds_error=False)
     return h
+
 
 def loglog_convexhull(equator,correction_factor = None):
     q = equator.q
