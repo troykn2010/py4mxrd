@@ -208,7 +208,7 @@ Everything is built on nd arrays
         self.peaks = {}
         self.fitted_values = None
 
-    def ROI(self,q0_range = [-1e10,1e10],q1_range = [-1e10]):
+    def ROI(self,q0_range = [-1e10,1e10],q1_range = [-1e10,1e10]):
         q0_min = max(q0_range[0],self.q0.min())
         q0_max = min(q0_range[1],self.q0.max())
         q1_min = max(q1_range[0],self.q1.min())
