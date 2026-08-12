@@ -52,8 +52,8 @@ class MuscleLineData():
 
         amplitude = y.max()
         y = y/y.max()
-        a0 = np.trapz(y,x) +1e-10
-        a1 = np.trapz(y*x,x) +1e-10
+        a0 = np.trapezoid(y,x) +1e-10
+        a1 = np.trapezoid(y*x,x) +1e-10
 
         p0 = [1,a1/a0,(x.max()-x.min())/6] #[0th,1st,2nd moments]
         if bounds == None:
@@ -202,9 +202,9 @@ class MuscleAreaData():
     """
     def __init__(self,q0_label,q0,q1_label,q1,values,quiet = True):
         self.q0 = q0
-        self.q0_label = q0_label #Ask user to explicitly state coordinate directions. x,y,i,j,radial,azimuthal
+        self.q0_label = q0_label #Ask user to explicitly state coordinate directions. x,y,i,j,radial,axial
         self.q1 = q1
-        self.q1_label = q1_label #Ask user to explicitly state coordinate directions. x,y,i,j,radial,azimuthal
+        self.q1_label = q1_label #Ask user to explicitly state coordinate directions. x,y,i,j,radial,axial
 
         self.values = values
         self.filtered_values = None
@@ -274,26 +274,36 @@ class MuscleAreaData():
         """
             example box:
 
-            c = 2*3.14159/10#1/nm to 1/angstroms
+            #Equators
+            e_principalSpacing = 38 #nm
+            e_peaks = {}
+            e_peaks['10'] = {'relative_qmin':e_principalSpacing/44, #Max
+                             'relative_qmax':e_principalSpacing/32, #Min
+                             'absolute_smin':1e-4 *c,
+                             'absolute_smax':4e-3 *c}
+            e_peaks['11'] = {'relative_qmin':1.73*0.75, 
+                             'relative_qmax':1.73*1.25,
+                             'absolute_smin':1e-4 *c,
+                             'absolute_smax':5e-3 *c}
+
             equator_box = {
                 'label':'equator',
-                'background_direction': 'x',
-                'reduce_direction': 'y',
-                'q0_min': 1/80 * c,
-                'q0_max': 1/15  * c,
-                'q1_min': 0,
-                'q1_max': 0.005 * c,
-                'PrincipalSpacing':38, #nm
+                'background_direction': 'radial',
+                'reduce_direction': 'axial',
+                'radial': [1/80 * c,1/15*c],
+                'axial': [0,0.005 * c],
+                'PrincipalSpacing': e_principalSpacing, #nm
                 'peaks':e_peaks,
                 'update_keys':[ ['10' ,'11']],
                 'update_method': 'NGaussian'
             }
+
         """
         d0 = box['PrincipalSpacing']
         q0 = (1/d0)*cfactor
 
-        boxAreaData = self.ROI(q0_range=[box['q0_min'],box['q0_max']],
-                               q1_range=[box['q1_min'],box['q1_max']],)
+        boxAreaData = self.ROI(q0_range=box[self.q0_label],
+                               q1_range=box[self.q1_label],)
 
         if 'radial' in box['label']:
             #Hacky
@@ -316,7 +326,7 @@ class MuscleAreaData():
 
         for update_keys in box['update_keys']:
             if box['update_method'] == 'NGaussian':
-                LineData.NGaussianFitKeys(update_keys,maxiter=1000,delta = 0.5) #Fit 10 and 11 together using initial fits as guesses
+                LineData.NGaussianFitKeys(update_keys,maxiter=1000,delta = 0.5) 
             elif box['update_method'] == 'NGaussianCluster':
                 LineData.FitClusterWithGaussians(update_keys,maxiter=1000)
             else:

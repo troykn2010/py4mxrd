@@ -4,7 +4,7 @@ from copy import deepcopy
 import matplotlib.pyplot as plt
 
 class fiber_image():
-    def __init__(self,image,mask,centeri=0,centerj=0,align_threshold=15,AutoCentering=False,quiet=True,dq = None,phi = 0):
+    def __init__(self,image,mask,centeri=0,centerj=0,align_threshold=15,AutoCentering=False,quiet=True,phi = 0):
         #image is a 2d nd.array       
         self.image = image
         self.mask = mask
@@ -70,9 +70,6 @@ class fiber_image():
             pad1 = (mm1-2*int_centerj,0)
         image = np.pad(image, (pad0,pad1)) 
 
-        #Pad again to avoid information lost when rotating
-        # R = int(np.ceil(np.sqrt((l//2)**2 + (m//2)**2)))
-        # image = np.pad(image, (  (R-l//2,R-l//2),(R-m//2,R-m//2) )  )
 
         if subpixel:
             #Subpixel shift to corner of pixel 
@@ -150,8 +147,8 @@ class fiber_image():
         output += np.flipud(np.fliplr(self.image))
 
         self.image = output/mask2
-        # self.output = output
-        # self.mask2 = mask2
+        (l,m) = self.image.shape
+        self.image = self.image[l//2:,m//2:]
     def ShowImage(self,axis):
         axis.imshow(np.log(self.image+1))
 
@@ -272,4 +269,14 @@ class FiberStack():
     #     for fiber in self.stack:
     #         for s in ListPeaks:
     #             peak = getattr(fiber,s[0][0]).peaks[s[0][1]]
+
+def quadrant_unfold(image): 
+    #image is the +/+ quadrant. This function unfolds it into four quadrants
+    n,m = image.shape
+    new = np.zeros((2*n-1,2*m-1))
+    new[:n,:m] = np.flipud(np.fliplr(image))
+    new[:n,m:] = np.flipud(image[:,:-1])
+    new[n:,:m] = np.fliplr(image[:-1,:])
+    new[n:,m:] = image[:-1,:-1]
+    return new
 
