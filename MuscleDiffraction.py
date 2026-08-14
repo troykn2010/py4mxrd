@@ -3,6 +3,8 @@ from scipy.optimize import minimize
 from copy import deepcopy
 from scipy.ndimage import gaussian_filter1d
 from .background_fits import monotonic
+from .FiberDiffraction import fiber_stack,fiber_data,fiber_image
+
 
 cfactor = 2*3.14159/10#1/nm to 1/angstroms
 
@@ -191,8 +193,29 @@ class MuscleLineData():
         for key in keys:
             self.fitted_values += self.Peak_Data(self.peaks[key])
 
+    def packh5(self,h5grp):
+        h5grp['values'] = self.values
+        h5grp['backgrounds'] = self.background
+        h5grp['signals'] = self.filtered_values
+        h5grp['fits'] = self.fitted_values
+        h5grp['q(angstrom-1)'] = self.q
+        h5grp['d(nm)'] = cfactor/self.q
+        
+        a = np.trapezoid(self.filtered_values*self.q/cfactor,self.q/cfactor)
+        b = np.trapezoid(self.filtered_values,self.q/cfactor)
+        h5grp['TotalArea(count nm-1)'] = b
+        h5grp['d_COM(nm)'] = b/a
+
+        peaks_grp = h5grp.create_group('peaks')
+        for key in self.peaks.keys():
+            peak_grp = peaks_grp.create_group(key)
+            peak_grp['dspacing(nm)'] = cfactor/self.peaks[key]['m1']
+            peak_grp['sigma(nm-1)'] = self.peaks[key]['m2']/cfactor
+            peak_grp['area(count nm-1)'] = self.peaks[key]['Area']/cfactor
+
     def copy(self):
         return deepcopy(self)
+
 
 
 class MuscleAreaData():
@@ -200,59 +223,67 @@ class MuscleAreaData():
     Rectilinear grid
     Everything is built on nd arrays
     """
-    def __init__(self,q0_label,q0,q1_label,q1,values,quiet = True):
-        self.q0 = q0
-        self.q0_label = q0_label #Ask user to explicitly state coordinate directions. x,y,i,j,radial,axial
-        self.q1 = q1
-        self.q1_label = q1_label #Ask user to explicitly state coordinate directions. x,y,i,j,radial,axial
+    def __init__(self,values,qi=None,qi_label='i',qj=None,qj_label='j', detector = None,quiet = True):
+        if detector is None:
+            self.qi = qi
+            self.qi_label = qi_label #Ask user to explicitly state coordinate directions. x,y,i,j,radial,axial
+            self.qj = qj
+            self.qj_label = qj_label #Ask user to explicitly state coordinate directions. x,y,i,j,radial,axial
+        else:
+            self.qi = detector.qi
+            self.qi_label = detector.qi_label
+            self.qj = detector.qj
+            self.qj_label= detector.qj_label
 
         self.values = values
         self.filtered_values = None
         self.background = None
         self.quiet = quiet  
 
-    def ROI(self,q0_range = [-1e10,1e10],q1_range = [-1e10,1e10]):
-        q0_min = max(q0_range[0],self.q0.min())
-        q0_max = min(q0_range[1],self.q0.max())
-        q1_min = max(q1_range[0],self.q1.min())
-        q1_max = min(q1_range[1],self.q1.max())
+    def ROI(self,qi_range = [-1e10,1e10],qj_range = [-1e10,1e10]):
+        qi_min = max(qi_range[0],self.qi.min())
+        qi_max = min(qi_range[1],self.qi.max())
+        qj_min = max(qj_range[0],self.qj.min())
+        qj_max = min(qj_range[1],self.qj.max())
 
-        bool0 = np.logical_and(self.q0>=q0_min,self.q0<q0_max)
-        bool1 = np.logical_and(self.q1>=q1_min,self.q1<q1_max)
+        booli = np.logical_and(self.qi>=qi_min,self.qi<qi_max)
+        boolj = np.logical_and(self.qj>=qj_min,self.qj<qj_max)
 
 
-        values = self.values[bool0,:]
-        values = values[:,bool1]
-        return MuscleAreaData(q0_label = self.q0_label,
-                              q0 = self.q0[bool0],
-                              q1_label =self.q1_label,
-                              q1 = self.q1[bool1],
+        values = self.values[booli,:]
+        values = values[:,boolj]
+
+
+        return MuscleAreaData(qi_label = self.qi_label,
+                              qi = self.qi[booli],
+                              qj_label =self.qj_label,
+                              qj = self.qj[boolj],
                               values = values,
                               quiet = self.quiet)
 
     def Reduce2LineData(self,reduce_direction):
-        if reduce_direction == self.q0_label:
-            q = self.q1
+        if reduce_direction == self.qi_label:
+            q = self.qj
             axis = 0
-        elif reduce_direction == self.q1_label:
-            q = self.q0
+        elif reduce_direction == self.qj_label:
+            q = self.qi
             axis = 1
         else:
-            raise Exception(f"reduce_direction needs to be either {self.q0_label} or {self.q1_label}")
+            raise Exception(f"reduce_direction needs to be either {self.qi_label} or {self.qj_label}")
         y = np.mean(self.values,axis = axis)
         y = np.squeeze(y) #drop empty dimensions
         LineData = MuscleLineData(q,y)
         return LineData
 
     def SubtractBackground_Monotonic_ConvexHull(self,direction):
-        if direction == self.q0_label:
+        if direction == self.qi_label:
             values = self.values.T
-            q = self.q0
-        elif direction == self.q1_label:
+            q = self.qi
+        elif direction == self.qj_label:
             values = self.values
-            q = self.q1
+            q = self.qj
         else:
-            raise Exception(f"direction needs to be either {self.q0_label} or {self.q1_label}")
+            raise Exception(f"direction needs to be either {self.qi_label} or {self.qj_label}")
 
         background = np.zeros(values.shape)
         filtered_values = np.zeros(values.shape)
@@ -262,10 +293,10 @@ class MuscleAreaData():
             background[i] = h(q)
             filtered_values[i] = line-background[i]
 
-        if direction == self.q0_label:
+        if direction == self.qi_label:
             self.filtered_values = filtered_values.T
             self.background = background.T
-        elif direction == self.q1_label:
+        elif direction == self.qj_label:
             self.filtered_values = filtered_values
             self.background = background
 
@@ -300,10 +331,10 @@ class MuscleAreaData():
 
         """
         d0 = box['PrincipalSpacing']
-        q0 = (1/d0)*cfactor
+        qi = (1/d0)*cfactor
 
-        boxAreaData = self.ROI(q0_range=box[self.q0_label],
-                               q1_range=box[self.q1_label],)
+        boxAreaData = self.ROI(qi_range=box[self.qi_label],
+                               qj_range=box[self.qj_label],)
 
         if 'radial' in box['label']:
             #Hacky
@@ -312,14 +343,14 @@ class MuscleAreaData():
             LineData = boxAreaData.Reduce2LineData(reduce_direction = box['reduce_direction'])
             #Background subtract already happened. This just sets filtered values to values and background to zero
             LineData.filtered_values = LineData.values
-            LineData.background = 0*LineData.q
+            LineData.background = np.zeros_like(LineData.q)
         else:
             LineData = boxAreaData.Reduce2LineData(reduce_direction = box['reduce_direction'])
             LineData.BackgroundRemoval(monotonic(LineData.q,LineData.values))
         for key in box['peaks'].keys():
             peak = box['peaks'][key]
-            bounds = [(0,1),(q0*peak['relative_qmin'],q0*peak['relative_qmax']),(peak['absolute_smin'],peak['absolute_smax']) ] #bounds on single gaussian fit
-            bool = np.logical_and(LineData.q>=q0*peak['relative_qmin'],LineData.q<=q0*peak['relative_qmax'])
+            bounds = [(0,1),(qi*peak['relative_qmin'],qi*peak['relative_qmax']),(peak['absolute_smin'],peak['absolute_smax']) ] #bounds on single gaussian fit
+            bool = np.logical_and(LineData.q>=qi*peak['relative_qmin'],LineData.q<=qi*peak['relative_qmax'])
             LineData.FitSingleGaussian(LineData.q[bool],LineData.filtered_values[bool],label = key,maxiter = 1000,bounds = bounds) #initial fits
             LineData.peaks[key]['smin'] = peak['absolute_smin']
             LineData.peaks[key]['smax'] = peak['absolute_smax']
@@ -337,3 +368,79 @@ class MuscleAreaData():
 
     def copy(self):
         return deepcopy(self)
+
+class MuscleStack(fiber_stack):
+    """
+    Child class of fiber_stack (which itself is a child of the list class) with specialized functions for muscles
+    """
+    def __init__(self,*args,**kwargs):
+        super().__init__(*args,**kwargs)
+
+    def proc_equators(self,equator_box,qi_label = 'axial',qj_label='radial'):
+        #Compute equatorial fits on entire stack
+        for fiber in self:
+            AreaData = MuscleAreaData(values = fiber.saxs_image,detector = fiber.saxs_detector)
+            fiber.equator = AreaData.proc_box(equator_box)
+
+        self.d10 = [cfactor/fiber.equator.peaks['10']['m1'] for fiber in self]
+        self.IR = [fiber.equator.peaks['11']['Area']/fiber.equator.peaks['10']['Area'] for fiber in self]
+        self.Area10 = [fiber.equator.peaks['10']['Area'] for fiber in self]
+
+    def merge(self,d10min=34,d10max=42,IRmin = 0 , IRmax = 1,Area10min = 0,Area10max = 10,remove = True):
+        if remove:
+            self.AndInclude([ d10>d10min for d10 in self.d10])
+            self.AndInclude([ d10<d10max for d10 in self.d10])
+            self.AndInclude([ IR>IRmin for IR in self.IR])
+            self.AndInclude([ IR<IRmax for IR in self.IR])
+            self.AndInclude([ Area10>Area10min for Area10 in self.Area10])
+            self.AndInclude([ Area10<Area10max for Area10 in self.Area10])
+
+        if self[0].saxs_image is not None:
+            saxs_merged = np.mean(self.getAttribute('saxs_image',exclude = True),axis = 0)
+        else:
+            saxs_merged = None
+        if self[0].waxs_image is not None:
+            waxs_merged = np.mean(self.getAttribute('waxs_image',exclude = True),axis = 0)
+        else:
+            waxs_merged = None
+        beamstop_intensity = np.mean(self.getAttribute('beamstop_intensity',exclude=True))
+
+        self.merged = fiber_data(saxs = [saxs_merged,self[0].saxs_detector],
+                          waxs = [waxs_merged,self[0].waxs_detector],
+                          beamstop_intensity = beamstop_intensity)
+        return self.merged,int(sum(self.include))
+
+    def packh5(self,h5grp,exclude = False):
+        #packs stack data into h5 file
+        equatorgrp = h5grp.create_group('equator')
+        equatorgrp['signals'] = self.getSubAttribute(Attribute='equator',SubAttribute='filtered_values',exclude=exclude)
+        equatorgrp['values'] = self.getSubAttribute(Attribute='equator',SubAttribute='values',exclude=exclude)
+        equatorgrp['backgrounds'] = self.getSubAttribute(Attribute='equator',SubAttribute='background',exclude=exclude)
+        equatorgrp['fits'] = self.getSubAttribute(Attribute='equator',SubAttribute='fitted_values',exclude=exclude)
+        equatorgrp['q(angstrom-1)'] = self[0].equator.q
+        equatorgrp['d(nm)'] = cfactor/self[0].equator.q
+
+        peaks = self.getSubAttribute(Attribute='equator',SubAttribute='peaks',exclude=exclude)
+        equatorgrp['peaks/10/dspacing(nm)']     = self.d10
+        equatorgrp['peaks/10/area(count nm-1)'] = [peak['10']['Area']/cfactor for peak in peaks]
+        equatorgrp['peaks/10/sigma(nm-1)']      = [peak['10']['m2']/cfactor for peak in peaks]
+
+        equatorgrp['peaks/11/dspacing(nm)']     = [cfactor/peak['11']['m1'] for peak in peaks]
+        equatorgrp['peaks/11/area(count nm-1)'] = [peak['11']['Area']/cfactor for peak in peaks]
+        equatorgrp['peaks/11/sigma(nm-1)']      = [peak['11']['m2']/cfactor for peak in peaks]
+
+        equatorgrp['IR'] = self.IR
+
+
+        h5grp['beamstop'] = self.getAttribute(Attribute='beamstop_intensity',exclude=exclude)
+
+        if self[0].saxs_image is not None:
+            saxsgrp = h5grp.create_group('saxs_data')
+            saxsgrp['data'] = self.getAttribute(Attribute='saxs_image',exclude=exclude)
+            saxsgrp['qi'] = self[0].saxs_detector.qi
+            saxsgrp['qj'] = self[0].saxs_detector.qj
+        if self[0].waxs_image is not None:
+            waxsgrp = h5grp.create_group('waxs_data')
+            waxsgrp['data'] = self.getAttribute(Attribute='waxs_image',exclude=exclude)
+            waxsgrp['qi'] = self[0].waxs_detector.qi
+            waxsgrp['qj'] = self[0].waxs_detector.qj

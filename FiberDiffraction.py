@@ -2,6 +2,7 @@ import numpy as np
 import cv2
 from copy import deepcopy
 import matplotlib.pyplot as plt
+from .detector import detector
 
 class fiber_image():
     def __init__(self,image,mask,centeri=0,centerj=0,align_threshold=15,AutoCentering=False,quiet=True,phi = 0):
@@ -33,7 +34,7 @@ class fiber_image():
             self.centerj = centerj
             self.centerx = centerj
             self.centery = centeri
-            
+    
     @staticmethod
     def compute_moments(image):
         #Image moments. #cv2 doesn't take in int32 so convert to float
@@ -149,39 +150,99 @@ class fiber_image():
         self.image = output/mask2
         (l,m) = self.image.shape
         self.image = self.image[l//2:,m//2:]
+        return self.image
     def ShowImage(self,axis):
         axis.imshow(np.log(self.image+1))
 
     def copy(self):
         return deepcopy(self)
 
-class Fiber():
-	"""
-	Currently trivial container for various fiber objects.
-	To expand on functionality as need arises
-	"""
-	saxs = None
-	waxs = None
-	meridonials = None
-	equators = None
+class fiber_data():
+    """
+    Container to hold all relevent information about one saxs/waxs data acquisition
+    """
+
+    def __init__(self,saxs = [None,None],waxs = [None,None],beamstop_intensity = None):
+        self.saxs_image = saxs[0] #np array
+        self.saxs_detector = saxs[1] #see detector class
+        self.waxs_image = waxs[0]
+        self.waxs_detector = waxs[1]
+        self.beamstop_intensity = beamstop_intensity
 
 
-class FiberStack():
+
+    def __str__(self):
+        print(f"beamstop intensity: {self.beamstop_intensity}")
+        if self.saxs_image is not None:
+            print(f"saxs image of shape {self.saxs_image.shape} of dtype {self.saxs_image.dtype}")
+            print(self.saxs_detector)
+
+        if self.waxs_image is not None:
+            print(f"waxs image of shape {self.waxs_image.shape} of dtype {self.waxs_image.dtype}")
+            print("waxs detector:")
+            print(self.waxs_detector)
+        return super().__str__()
+
+    def FiberSymmetry(self,image,det,align_threshold):
+        new_image = fiber_image(image = image,
+                                mask = det.mask,
+                                centeri = det.centeri,
+                                centerj = det.centerj)
+        out = new_image.RotateAndApplySymmetry() #Returns only the +/+ quadrant since all four are identical. Use quadrant_unfold to recreate full image
+
+        new_detector = detector(
+                            detector_name = 'virtual',
+                            distance = det.distance,
+                            wavelength = det.wavelength,
+                            shape = new_image.image.shape,
+                            centeri = 0,
+                            centerj = 0,
+                            dqi = det.dqi,
+                            dqj = det.dqj,
+                            qi_label = 'axial',
+                            qj_label = 'radial') #might have to transpose to get axes as intended 
+        return out, new_detector
+
+    def ApplyFiberSymmetry(self,saxs_align_threshold=15,waxs_align_threshold=15):
+        if self.saxs_image is not None:
+            self.saxs_image,self.saxs_detector = self.FiberSymmetry(self.saxs_image,self.saxs_detector,saxs_align_threshold)
+        if self.waxs_image is not None:
+            self.waxs_image,self.waxs_detector = self.FiberSymmetry(self.waxs_image,self.waxs_detector,saxs_align_threshold)
+
+
+    def packh5(self,h5grp):
+        h5grp['beamstop'] = self.beamstop_intensity
+        if self.saxs_image is not None:
+            saxsgrp = h5grp.create_group('saxs_data')
+            saxsgrp['data'] = self.saxs_image
+            saxsgrp['qi'] = self.saxs_detector.qi
+            saxsgrp['qj'] = self.saxs_detector.qj
+        if self.waxs_image is not None:
+            waxsgrp = h5grp.create_group('waxs_data')
+            waxsgrp['data'] = self.waxs_image
+            waxsgrp['qi'] = self.waxs_detector.qi
+            waxsgrp['qj'] = self.waxs_detector.qj
+
+class fiber_stack(list):
     """
     List of fiber containers with slightly specialized list operations.
-    Containers are assumed to be homogenous in structure
-    """
-    def __init__(self,stack):
-        self.stack = stack
-        self.include = [True]*len(stack)
+    Containers are assumed to be homogenous in structure.
 
-    def append(self,Fiber):
-        """
-        Append new Fiber container
-        """
-        self.stack.append(Fiber)
+    """
+    def __init__(self,*args,**kwargs):
+        super().__init__(*args,**kwargs)
+        self.include = [True]*len(self)
+
+    def append(self,fiber):
+        #modified default list append function to update include index
+        super().append(fiber)
         self.include.append(True)
         
+    def pop(self,i):
+        #modified default list pop function to also pop include index
+        super().pop(i)
+        self.include.pop(i)
+
     def AndInclude(self,newinclude):
         self.include = [A and B for (A,B) in zip(self.include,newinclude)]
 
@@ -200,75 +261,23 @@ class FiberStack():
         N = len(self.stack)
         for i in range(N-1,0,-1):
             if ~self.include[i]:
-                self.stack.pop(i)
-                self.include.pop(i)
+                self.pop(i)
 
     def ReturnSubStack(self,index):
     	return FiberStack([self.stack[i] for i in index])
-                
-    # def getImages(self,exclude = True):
-    #     """
-    #     Returns stack of fiber images as a list
-    #     optional input exclude = True ignores all entries that have been excluded
-    #     """
-    #     if exclude:
-    #         return [myosaxs.image for (include,myosaxs) in zip(self.include,self.stack) if include]
-    #     else:
-    #         return [myosaxs.image for myosaxs in self.stack]
+
     def getAttribute(self,Attribute,exclude=True):
         if exclude:
-            return [getattr(Fiber,Attribute) for (include,Fiber) in zip(self.include,self.stack) if include]
+            return [getattr(Fiber,Attribute) for (include,Fiber) in zip(self.include,self) if include]
         else:
-            return [getattr(Fiber,Attribute)  for Fiber in self.stack]
+            return [getattr(Fiber,Attribute)  for Fiber in self]
 
     def getSubAttribute(self,Attribute,SubAttribute,exclude=True):
         if exclude:
-            return [getattr(getattr(Fiber,Attribute),SubAttribute) for (include,Fiber) in zip(self.include,self.stack) if include]
+            return [getattr(getattr(Fiber,Attribute),SubAttribute) for (include,Fiber) in zip(self.include,self) if include]
         else:
-            return [getattr(getattr(Fiber,Attribute),SubAttribute)  for Fiber in self.stack]
+            return [getattr(getattr(Fiber,Attribute),SubAttribute)  for Fiber in self]
 
-    def getEquatorAttribute(self,Attribute,exclude = True):
-        """
-        Returns equator attributes as a list. Supported attributes are: 
-
-        optional input exclude = True ignores all entries that have been excluded
-        
-        q10: q-space position of equatorial 1,0 reflection
-        A10: amplitude of equatorial 1,0 reflection
-        s10: sigma of gaussian fit in q-space of equatorial 1,0 reflection
-        I10: Area under the gaussian fit of 1,0 reflection
-    
-        q11: q-space position of equatorial 1,1 reflection
-        Aratio: A11/A10 where A11 is the amplitude of equatorial 1,1 reflection
-        s11: sigma of gaussian fit in q-space of equatorial 1,1 reflection
-        I11: Area under the gaussian fit of 1,1 reflection
-    
-        IR: I11/I10
-    
-        q: q-values
-        fitted_10: trace for gaussian fit of 10
-        fitted_11: trace for gaussian fit of 11
-        fitted_values: trace of total fit
-        """
-        if exclude:
-            return [getattr(myosaxs.equator,Attribute) for (include,myosaxs) in zip(self.include,self.stack) if include]
-        else:
-            return [getattr(myosaxs.equator,Attribute) for myosaxs in self.stack]
-            
-
-        
-    # def Export2CSV(self, filename ,ListMuscleLineDataName):
-    #     #First, figure out all columns
-    #     fiber = self.stack[0]
-    #     ListPeaks = []
-    #     for MuscleLineDataName in ListMuscleLineDataName:
-    #         peaks = getattr(getattr(fiber,MuscleLineDataName),'peaks')
-    #         for key in peaks.keys():
-    #             ListPeaks.append([MuscleLineDataName,key])
-
-    #     for fiber in self.stack:
-    #         for s in ListPeaks:
-    #             peak = getattr(fiber,s[0][0]).peaks[s[0][1]]
 
 def quadrant_unfold(image): 
     #image is the +/+ quadrant. This function unfolds it into four quadrants
